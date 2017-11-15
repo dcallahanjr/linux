@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /* 32-bit atomic xchg() and cmpxchg() definitions.
  *
  * Copyright (C) 1996 David S. Miller (davem@davemloft.net)
@@ -34,7 +35,6 @@ static inline unsigned long __xchg(unsigned long x, __volatile__ void * ptr, int
  *
  * Cribbed from <asm-parisc/atomic.h>
  */
-#define __HAVE_ARCH_CMPXCHG	1
 
 /* bug catcher for when unsupported size is used - won't link */
 void __cmpxchg_called_with_bad_pointer(void);

@@ -529,9 +529,9 @@ static unsigned int loopback_pos_update(struct loopback_cable *cable)
 	return running;
 }
 
-static void loopback_timer_function(unsigned long data)
+static void loopback_timer_function(struct timer_list *t)
 {
-	struct loopback_pcm *dpcm = (struct loopback_pcm *)data;
+	struct loopback_pcm *dpcm = from_timer(dpcm, t, timer);
 	unsigned long flags;
 
 	spin_lock_irqsave(&dpcm->cable->lock, flags);
@@ -561,7 +561,7 @@ static snd_pcm_uframes_t loopback_pointer(struct snd_pcm_substream *substream)
 	return bytes_to_frames(runtime, pos);
 }
 
-static struct snd_pcm_hardware loopback_pcm_hardware =
+static const struct snd_pcm_hardware loopback_pcm_hardware =
 {
 	.info =		(SNDRV_PCM_INFO_INTERLEAVED | SNDRV_PCM_INFO_MMAP |
 			 SNDRV_PCM_INFO_MMAP_VALID | SNDRV_PCM_INFO_PAUSE |
@@ -675,8 +675,7 @@ static int loopback_open(struct snd_pcm_substream *substream)
 	}
 	dpcm->loopback = loopback;
 	dpcm->substream = substream;
-	setup_timer(&dpcm->timer, loopback_timer_function,
-		    (unsigned long)dpcm);
+	timer_setup(&dpcm->timer, loopback_timer_function, 0);
 
 	cable = loopback->cables[substream->number][dev];
 	if (!cable) {
@@ -750,7 +749,7 @@ static int loopback_close(struct snd_pcm_substream *substream)
 	return 0;
 }
 
-static struct snd_pcm_ops loopback_playback_ops = {
+static const struct snd_pcm_ops loopback_playback_ops = {
 	.open =		loopback_open,
 	.close =	loopback_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -763,7 +762,7 @@ static struct snd_pcm_ops loopback_playback_ops = {
 	.mmap =		snd_pcm_lib_mmap_vmalloc,
 };
 
-static struct snd_pcm_ops loopback_capture_ops = {
+static const struct snd_pcm_ops loopback_capture_ops = {
 	.open =		loopback_open,
 	.close =	loopback_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -1053,8 +1052,6 @@ static int loopback_mixer_new(struct loopback *loopback, int notify)
 	return 0;
 }
 
-#ifdef CONFIG_PROC_FS
-
 static void print_dpcm_info(struct snd_info_buffer *buffer,
 			    struct loopback_pcm *dpcm,
 			    const char *id)
@@ -1127,12 +1124,6 @@ static int loopback_proc_new(struct loopback *loopback, int cidx)
 	snd_info_set_text_ops(entry, loopback, print_cable_info);
 	return 0;
 }
-
-#else /* !CONFIG_PROC_FS */
-
-#define loopback_proc_new(loopback, cidx) do { } while (0)
-
-#endif
 
 static int loopback_probe(struct platform_device *devptr)
 {

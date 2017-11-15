@@ -68,7 +68,7 @@ static struct resource wdt_res;
 static void __iomem *wdt_mem;
 static unsigned int mmio;
 static void wdt_timer_tick(unsigned long data);
-static DEFINE_TIMER(timer, wdt_timer_tick, 0, 0);
+static DEFINE_TIMER(timer, wdt_timer_tick);
 					/* The timer that pings the watchdog */
 static unsigned long next_heartbeat;	/* the next_heartbeat for the timer */
 
@@ -206,6 +206,7 @@ static int wdt_probe(struct pci_dev *pdev,
 		timeout = WDT_TIMEOUT;
 
 	wdt_dev.timeout = timeout;
+	wdt_dev.parent = &pdev->dev;
 	watchdog_set_nowayout(&wdt_dev, nowayout);
 	if (readl(wdt_mem) & VIA_WDT_FIRED)
 		wdt_dev.bootstatus |= WDIOF_CARDRESET;

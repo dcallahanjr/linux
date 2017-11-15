@@ -1,19 +1,8 @@
-/* Driver for Realtek RTS51xx USB card reader
+// SPDX-License-Identifier: GPL-2.0+
+/*
+ * Driver for Realtek RTS51xx USB card reader
  *
  * Copyright(c) 2009 Realtek Semiconductor Corp. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation; either version 2, or (at your option) any
- * later version.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along
- * with this program; if not, see <http://www.gnu.org/licenses/>.
  *
  * Author:
  *   wwang (wei_wang@realsil.com.cn)
@@ -39,11 +28,13 @@
 #include "transport.h"
 #include "protocol.h"
 #include "debug.h"
+#include "scsiglue.h"
+
+#define DRV_NAME "ums-realtek"
 
 MODULE_DESCRIPTION("Driver for Realtek USB Card Reader");
 MODULE_AUTHOR("wwang <wei_wang@realsil.com.cn>");
 MODULE_LICENSE("GPL");
-MODULE_VERSION("1.03");
 
 static int auto_delink_en = 1;
 module_param(auto_delink_en, int, S_IRUGO | S_IWUSR);
@@ -264,8 +255,10 @@ static int rts51x_bulk_transport(struct us_data *us, u8 lun,
 	if (bcs->Tag != us->tag)
 		return USB_STOR_TRANSPORT_ERROR;
 
-	/* try to compute the actual residue, based on how much data
-	 * was really transferred and what the device tells us */
+	/*
+	 * try to compute the actual residue, based on how much data
+	 * was really transferred and what the device tells us
+	 */
 	if (residue)
 		residue = residue < buf_len ? residue : buf_len;
 
@@ -283,7 +276,8 @@ static int rts51x_bulk_transport(struct us_data *us, u8 lun,
 		return USB_STOR_TRANSPORT_FAILED;
 
 	case US_BULK_STAT_PHASE:
-		/* phase error -- note that a transport reset will be
+		/*
+		 * phase error -- note that a transport reset will be
 		 * invoked by the invoke_transport() function
 		 */
 		return USB_STOR_TRANSPORT_ERROR;
@@ -1034,6 +1028,8 @@ INIT_FAIL:
 	return -EIO;
 }
 
+static struct scsi_host_template realtek_cr_host_template;
+
 static int realtek_cr_probe(struct usb_interface *intf,
 			    const struct usb_device_id *id)
 {
@@ -1044,7 +1040,8 @@ static int realtek_cr_probe(struct usb_interface *intf,
 
 	result = usb_stor_probe1(&us, intf, id,
 				 (id - realtek_cr_ids) +
-				 realtek_cr_unusual_dev_list);
+				 realtek_cr_unusual_dev_list,
+				 &realtek_cr_host_template);
 	if (result)
 		return result;
 
@@ -1054,7 +1051,7 @@ static int realtek_cr_probe(struct usb_interface *intf,
 }
 
 static struct usb_driver realtek_cr_driver = {
-	.name = "ums-realtek",
+	.name = DRV_NAME,
 	.probe = realtek_cr_probe,
 	.disconnect = usb_stor_disconnect,
 	/* .suspend =      usb_stor_suspend, */
@@ -1070,4 +1067,4 @@ static struct usb_driver realtek_cr_driver = {
 	.no_dynamic_id = 1,
 };
 
-module_usb_driver(realtek_cr_driver);
+module_usb_stor_driver(realtek_cr_driver, realtek_cr_host_template, DRV_NAME);

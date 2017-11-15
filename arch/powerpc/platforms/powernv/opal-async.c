@@ -117,6 +117,11 @@ int opal_async_wait_response(uint64_t token, struct opal_msg *msg)
 		return -EINVAL;
 	}
 
+	/* Wakeup the poller before we wait for events to speed things
+	 * up on platforms or simulators where the interrupts aren't
+	 * functional.
+	 */
+	opal_wake_poller();
 	wait_event(opal_async_wait, test_bit(token, opal_async_complete_map));
 	memcpy(msg, &opal_async_responses[token], sizeof(*msg));
 
@@ -151,7 +156,7 @@ static struct notifier_block opal_async_comp_nb = {
 		.priority	= 0,
 };
 
-static int __init opal_async_comp_init(void)
+int __init opal_async_comp_init(void)
 {
 	struct device_node *opal_node;
 	const __be32 *async;
@@ -166,8 +171,8 @@ static int __init opal_async_comp_init(void)
 
 	async = of_get_property(opal_node, "opal-msg-async-num", NULL);
 	if (!async) {
-		pr_err("%s: %s has no opal-msg-async-num\n",
-				__func__, opal_node->full_name);
+		pr_err("%s: %pOF has no opal-msg-async-num\n",
+				__func__, opal_node);
 		err = -ENOENT;
 		goto out_opal_node;
 	}
@@ -205,4 +210,3 @@ out_opal_node:
 out:
 	return err;
 }
-machine_subsys_initcall(powernv, opal_async_comp_init);

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * KGDB NMI serial console
  *
@@ -6,10 +7,6 @@
  *		  Colin Cross <ccross@android.com>
  * Copyright 2012 Linaro Ltd.
  *		  Anton Vorontsov <anton.vorontsov@linaro.org>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation.
  */
 
 #include <linux/kernel.h>
@@ -173,18 +170,18 @@ static int kgdb_nmi_poll_one_knock(void)
 bool kgdb_nmi_poll_knock(void)
 {
 	if (kgdb_nmi_knock < 0)
-		return 1;
+		return true;
 
 	while (1) {
 		int ret;
 
 		ret = kgdb_nmi_poll_one_knock();
 		if (ret == NO_POLL_CHAR)
-			return 0;
+			return false;
 		else if (ret == 1)
 			break;
 	}
-	return 1;
+	return true;
 }
 
 /*

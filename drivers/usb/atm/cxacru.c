@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /******************************************************************************
  *  cxacru.c  -  driver for USB ADSL modems based on
  *               Conexant AccessRunner chipset
@@ -6,21 +7,6 @@
  *  Copyright (C) 2005 Duncan Sands, Roman Kagan (rkagan % mail ! ru)
  *  Copyright (C) 2007 Simon Arlott
  *  Copyright (C) 2009 Simon Arlott
- *
- *  This program is free software; you can redistribute it and/or modify it
- *  under the terms of the GNU General Public License as published by the Free
- *  Software Foundation; either version 2 of the License, or (at your option)
- *  any later version.
- *
- *  This program is distributed in the hope that it will be useful, but WITHOUT
- *  ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- *  FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- *  more details.
- *
- *  You should have received a copy of the GNU General Public License along with
- *  this program; if not, write to the Free Software Foundation, Inc., 59
- *  Temple Place - Suite 330, Boston, MA  02111-1307, USA.
- *
  ******************************************************************************/
 
 /*
@@ -43,7 +29,6 @@
 #include "usbatm.h"
 
 #define DRIVER_AUTHOR	"Roman Kagan, David Woodhouse, Duncan Sands, Simon Arlott"
-#define DRIVER_VERSION	"0.4"
 #define DRIVER_DESC	"Conexant AccessRunner ADSL USB modem driver"
 
 static const char cxacru_driver_name[] = "cxacru";
@@ -270,6 +255,7 @@ static ssize_t cxacru_sysfs_showattr_dB(s16 value, char *buf)
 static ssize_t cxacru_sysfs_showattr_bool(u32 value, char *buf)
 {
 	static char *str[] = { "no", "yes" };
+
 	if (unlikely(value >= ARRAY_SIZE(str)))
 		return snprintf(buf, PAGE_SIZE, "%u\n", value);
 	return snprintf(buf, PAGE_SIZE, "%s\n", str[value]);
@@ -278,6 +264,7 @@ static ssize_t cxacru_sysfs_showattr_bool(u32 value, char *buf)
 static ssize_t cxacru_sysfs_showattr_LINK(u32 value, char *buf)
 {
 	static char *str[] = { NULL, "not connected", "connected", "lost" };
+
 	if (unlikely(value >= ARRAY_SIZE(str) || str[value] == NULL))
 		return snprintf(buf, PAGE_SIZE, "%u\n", value);
 	return snprintf(buf, PAGE_SIZE, "%s\n", str[value]);
@@ -423,6 +410,7 @@ static ssize_t cxacru_sysfs_store_adsl_state(struct device *dev,
 		case CXPOLL_STOPPING:
 			/* abort stop request */
 			instance->poll_state = CXPOLL_POLLING;
+			/* fall through */
 		case CXPOLL_POLLING:
 		case CXPOLL_SHUTDOWN:
 			/* don't start polling */
@@ -472,7 +460,9 @@ static ssize_t cxacru_sysfs_store_adsl_config(struct device *dev,
 		ret = sscanf(buf + pos, "%x=%x%n", &index, &value, &tmp);
 		if (ret < 2)
 			return -EINVAL;
-		if (index < 0 || index > 0x7f)
+		if (index > 0x7f)
+			return -EINVAL;
+		if (tmp < 0 || tmp > len - pos)
 			return -EINVAL;
 		pos += tmp;
 
@@ -567,10 +557,8 @@ static int cxacru_start_wait_urb(struct urb *urb, struct completion *done,
 {
 	struct timer_list timer;
 
-	init_timer(&timer);
+	setup_timer(&timer, cxacru_timeout_kill, (unsigned long)urb);
 	timer.expires = jiffies + msecs_to_jiffies(CMD_TIMEOUT);
-	timer.data = (unsigned long) urb;
-	timer.function = cxacru_timeout_kill;
 	add_timer(&timer);
 	wait_for_completion(done);
 	del_timer_sync(&timer);
@@ -702,6 +690,7 @@ static int cxacru_cm_get_array(struct cxacru_data *instance, enum cxacru_cm_requ
 	len = ret / 4;
 	for (offb = 0; offb < len; ) {
 		int l = le32_to_cpu(buf[offb++]);
+
 		if (l < 0 || l > stride || l > (len - offb) / 2) {
 			if (printk_ratelimit())
 				usb_err(instance->usbatm, "invalid data length from cm %#x: %d\n",
@@ -732,6 +721,7 @@ cleanup:
 static int cxacru_card_status(struct cxacru_data *instance)
 {
 	int ret = cxacru_cm(instance, CM_REQUEST_CARD_GET_STATUS, NULL, 0, NULL, 0);
+
 	if (ret < 0) {		/* firmware not loaded */
 		usb_dbg(instance->usbatm, "cxacru_adsl_start: CARD_GET_STATUS returned %d\n", ret);
 		return ret;
@@ -792,6 +782,7 @@ static int cxacru_atm_start(struct usbatm_data *usbatm_instance,
 	case CXPOLL_STOPPING:
 		/* abort stop request */
 		instance->poll_state = CXPOLL_POLLING;
+		/* fall through */
 	case CXPOLL_POLLING:
 	case CXPOLL_SHUTDOWN:
 		/* don't start polling */
@@ -945,6 +936,7 @@ static int cxacru_fw(struct usb_device *usb_dev, enum cxacru_fw_request fw,
 	offb = offd = 0;
 	do {
 		int l = min_t(int, stride, size - offd);
+
 		buf[offb++] = fw;
 		buf[offb++] = l;
 		buf[offb++] = code1;
@@ -1091,8 +1083,8 @@ static int cxacru_heavy_init(struct usbatm_data *usbatm_instance,
 {
 	const struct firmware *fw, *bp;
 	struct cxacru_data *instance = usbatm_instance->driver_data;
-
 	int ret = cxacru_find_firmware(instance, "fw", &fw);
+
 	if (ret) {
 		usb_warn(usbatm_instance, "firmware (cxacru-fw.bin) unavailable (system misconfigured?)\n");
 		return ret;
@@ -1132,10 +1124,8 @@ static int cxacru_bind(struct usbatm_data *usbatm_instance,
 
 	/* instance init */
 	instance = kzalloc(sizeof(*instance), GFP_KERNEL);
-	if (!instance) {
-		usb_dbg(usbatm_instance, "cxacru_bind: no memory for instance data\n");
+	if (!instance)
 		return -ENOMEM;
-	}
 
 	instance->usbatm = usbatm_instance;
 	instance->modem_type = (struct cxacru_modem_type *) id->driver_info;
@@ -1161,13 +1151,11 @@ static int cxacru_bind(struct usbatm_data *usbatm_instance,
 	}
 	instance->rcv_urb = usb_alloc_urb(0, GFP_KERNEL);
 	if (!instance->rcv_urb) {
-		usb_dbg(usbatm_instance, "cxacru_bind: no memory for rcv_urb\n");
 		ret = -ENOMEM;
 		goto fail;
 	}
 	instance->snd_urb = usb_alloc_urb(0, GFP_KERNEL);
 	if (!instance->snd_urb) {
-		usb_dbg(usbatm_instance, "cxacru_bind: no memory for snd_urb\n");
 		ret = -ENOMEM;
 		goto fail;
 	}
@@ -1377,4 +1365,3 @@ module_usb_driver(cxacru_usb_driver);
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);
 MODULE_LICENSE("GPL");
-MODULE_VERSION(DRIVER_VERSION);

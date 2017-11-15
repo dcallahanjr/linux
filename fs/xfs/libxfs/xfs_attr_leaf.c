@@ -41,6 +41,7 @@
 #include "xfs_buf_item.h"
 #include "xfs_cksum.h"
 #include "xfs_dir2.h"
+#include "xfs_log.h"
 
 
 /*
@@ -252,6 +253,7 @@ xfs_attr3_leaf_verify(
 {
 	struct xfs_mount	*mp = bp->b_target->bt_mount;
 	struct xfs_attr_leafblock *leaf = bp->b_addr;
+	struct xfs_perag *pag = bp->b_pag;
 	struct xfs_attr3_icleaf_hdr ichdr;
 
 	xfs_attr3_leaf_hdr_from_disk(mp->m_attr_geo, &ichdr, leaf);
@@ -262,15 +264,22 @@ xfs_attr3_leaf_verify(
 		if (ichdr.magic != XFS_ATTR3_LEAF_MAGIC)
 			return false;
 
-		if (!uuid_equal(&hdr3->info.uuid, &mp->m_sb.sb_uuid))
+		if (!uuid_equal(&hdr3->info.uuid, &mp->m_sb.sb_meta_uuid))
 			return false;
 		if (be64_to_cpu(hdr3->info.blkno) != bp->b_bn)
+			return false;
+		if (!xfs_log_check_lsn(mp, be64_to_cpu(hdr3->info.lsn)))
 			return false;
 	} else {
 		if (ichdr.magic != XFS_ATTR_LEAF_MAGIC)
 			return false;
 	}
-	if (ichdr.count == 0)
+	/*
+	 * In recovery there is a transient state where count == 0 is valid
+	 * because we may have transitioned an empty shortform attr to a leaf
+	 * if the attr didn't fit in shortform.
+	 */
+	if (pag && pag->pagf_init && ichdr.count == 0)
 		return false;
 
 	/* XXX: need to range check rest of attr header values */
@@ -325,6 +334,7 @@ xfs_attr3_leaf_read_verify(
 }
 
 const struct xfs_buf_ops xfs_attr3_leaf_buf_ops = {
+	.name = "xfs_attr3_leaf",
 	.verify_read = xfs_attr3_leaf_read_verify,
 	.verify_write = xfs_attr3_leaf_write_verify,
 };
@@ -341,7 +351,7 @@ xfs_attr3_leaf_read(
 
 	err = xfs_da_read_buf(tp, dp, bno, mappedbno, bpp,
 				XFS_ATTR_FORK, &xfs_attr3_leaf_buf_ops);
-	if (!err && tp)
+	if (!err && tp && *bpp)
 		xfs_trans_buf_set_type(tp, *bpp, XFS_BLFT_ATTR_LEAF_BUF);
 	return err;
 }
@@ -387,12 +397,8 @@ xfs_attr_shortform_bytesfit(xfs_inode_t *dp, int bytes)
 	/* rounded down */
 	offset = (XFS_LITINO(mp, dp->i_d.di_version) - bytes) >> 3;
 
-	switch (dp->i_d.di_format) {
-	case XFS_DINODE_FMT_DEV:
+	if (dp->i_d.di_format == XFS_DINODE_FMT_DEV) {
 		minforkoff = roundup(sizeof(xfs_dev_t), 8) >> 3;
-		return (offset >= minforkoff) ? minforkoff : 0;
-	case XFS_DINODE_FMT_UUID:
-		minforkoff = roundup(sizeof(uuid_t), 8) >> 3;
 		return (offset >= minforkoff) ? minforkoff : 0;
 	}
 
@@ -574,8 +580,8 @@ xfs_attr_shortform_add(xfs_da_args_t *args, int forkoff)
  * After the last attribute is removed revert to original inode format,
  * making all literal area available to the data fork once more.
  */
-STATIC void
-xfs_attr_fork_reset(
+void
+xfs_attr_fork_remove(
 	struct xfs_inode	*ip,
 	struct xfs_trans	*tp)
 {
@@ -641,7 +647,7 @@ xfs_attr_shortform_remove(xfs_da_args_t *args)
 	    (mp->m_flags & XFS_MOUNT_ATTR2) &&
 	    (dp->i_d.di_format != XFS_DINODE_FMT_BTREE) &&
 	    !(args->op_flags & XFS_DA_OP_ADDNAME)) {
-		xfs_attr_fork_reset(dp, args->trans);
+		xfs_attr_fork_remove(dp, args->trans);
 	} else {
 		xfs_idata_realloc(dp, -size, XFS_ATTR_FORK);
 		dp->i_d.di_forkoff = xfs_attr_shortform_bytesfit(dp, totsize);
@@ -788,7 +794,7 @@ xfs_attr_shortform_to_leaf(xfs_da_args_t *args)
 	nargs.dp = dp;
 	nargs.geo = args->geo;
 	nargs.firstblock = args->firstblock;
-	nargs.flist = args->flist;
+	nargs.dfops = args->dfops;
 	nargs.total = args->total;
 	nargs.whichfork = XFS_ATTR_FORK;
 	nargs.trans = args->trans;
@@ -905,7 +911,7 @@ xfs_attr3_leaf_to_shortform(
 	if (forkoff == -1) {
 		ASSERT(dp->i_mount->m_flags & XFS_MOUNT_ATTR2);
 		ASSERT(dp->i_d.di_format != XFS_DINODE_FMT_BTREE);
-		xfs_attr_fork_reset(dp, args->trans);
+		xfs_attr_fork_remove(dp, args->trans);
 		goto out;
 	}
 
@@ -918,7 +924,7 @@ xfs_attr3_leaf_to_shortform(
 	nargs.geo = args->geo;
 	nargs.dp = dp;
 	nargs.firstblock = args->firstblock;
-	nargs.flist = args->flist;
+	nargs.dfops = args->dfops;
 	nargs.total = args->total;
 	nargs.whichfork = XFS_ATTR_FORK;
 	nargs.trans = args->trans;
@@ -1056,7 +1062,7 @@ xfs_attr3_leaf_create(
 
 		hdr3->blkno = cpu_to_be64(bp->b_bn);
 		hdr3->owner = cpu_to_be64(dp->i_ino);
-		uuid_copy(&hdr3->uuid, &mp->m_sb.sb_uuid);
+		uuid_copy(&hdr3->uuid, &mp->m_sb.sb_meta_uuid);
 
 		ichdr.freemap[0].base = sizeof(struct xfs_attr3_leaf_hdr);
 	} else {
@@ -2598,7 +2604,7 @@ xfs_attr3_leaf_clearflag(
 	/*
 	 * Commit the flag value change and start the next trans in series.
 	 */
-	return xfs_trans_roll(&args->trans, args->dp);
+	return xfs_trans_roll_inode(&args->trans, args->dp);
 }
 
 /*
@@ -2649,7 +2655,7 @@ xfs_attr3_leaf_setflag(
 	/*
 	 * Commit the flag value change and start the next trans in series.
 	 */
-	return xfs_trans_roll(&args->trans, args->dp);
+	return xfs_trans_roll_inode(&args->trans, args->dp);
 }
 
 /*
@@ -2767,7 +2773,7 @@ xfs_attr3_leaf_flipflags(
 	/*
 	 * Commit the flag value change and start the next trans in series.
 	 */
-	error = xfs_trans_roll(&args->trans, args->dp);
+	error = xfs_trans_roll_inode(&args->trans, args->dp);
 
 	return error;
 }

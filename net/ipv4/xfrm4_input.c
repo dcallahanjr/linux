@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * xfrm4_input.c
  *
@@ -22,7 +23,8 @@ int xfrm4_extract_input(struct xfrm_state *x, struct sk_buff *skb)
 	return xfrm4_extract_header(skb);
 }
 
-static inline int xfrm4_rcv_encap_finish(struct sock *sk, struct sk_buff *skb)
+static inline int xfrm4_rcv_encap_finish(struct net *net, struct sock *sk,
+					 struct sk_buff *skb)
 {
 	if (!skb_dst(skb)) {
 		const struct iphdr *iph = ip_hdr(skb);
@@ -39,6 +41,7 @@ drop:
 
 int xfrm4_transport_finish(struct sk_buff *skb, int async)
 {
+	struct xfrm_offload *xo = xfrm_offload(skb);
 	struct iphdr *iph = ip_hdr(skb);
 
 	iph->protocol = XFRM_MODE_SKB_CB(skb)->protocol;
@@ -52,8 +55,13 @@ int xfrm4_transport_finish(struct sk_buff *skb, int async)
 	iph->tot_len = htons(skb->len);
 	ip_send_check(iph);
 
-	NF_HOOK(NFPROTO_IPV4, NF_INET_PRE_ROUTING, NULL, skb,
-		skb->dev, NULL,
+	if (xo && (xo->flags & XFRM_GRO)) {
+		skb_mac_header_rebuild(skb);
+		return 0;
+	}
+
+	NF_HOOK(NFPROTO_IPV4, NF_INET_PRE_ROUTING,
+		dev_net(skb->dev), NULL, skb, skb->dev, NULL,
 		xfrm4_rcv_encap_finish);
 	return 0;
 }
